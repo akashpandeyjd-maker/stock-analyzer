@@ -3,14 +3,13 @@ import yfinance as yf
 import pandas as pd
 import feedparser
 import urllib.parse
-from datetime import datetime, timedelta
 
 st.set_page_config(page_title="Pro Stock Analyzer", layout="wide")
 
-st.title("📈 Pro Stock Analyzer")
+st.title("📈 Pro Stock Analyzer 🚀")
 
 # -------------------------
-# Sample NSE stocks
+# NSE STOCK LIST (You can expand later)
 # -------------------------
 stocks = [
     "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS",
@@ -18,20 +17,28 @@ stocks = [
     "AXISBANK.NS", "BHARTIARTL.NS"
 ]
 
-
 # -------------------------
-# Get performance
+# PERFORMANCE FUNCTION (FIXED)
 # -------------------------
 def get_performance(period):
     data = []
 
     for ticker in stocks:
-        stock = yf.Ticker(ticker)
-        hist = stock.history(period=period)
+        try:
+            stock = yf.Ticker(ticker)
 
-        if len(hist) >= 2:
+            # FIX for 1 day issue
+            if period == "1d":
+                hist = stock.history(period="2d")
+            else:
+                hist = stock.history(period=period)
+
+            if hist is None or len(hist) < 2:
+                continue
+
             start = hist["Close"].iloc[0]
             end = hist["Close"].iloc[-1]
+
             change = ((end - start) / start) * 100
 
             data.append({
@@ -40,78 +47,136 @@ def get_performance(period):
                 "Change %": round(change, 2)
             })
 
+        except:
+            continue
+
+    # Safety check
+    if not data:
+        return pd.DataFrame(columns=["Ticker", "Price", "Change %"])
+
     df = pd.DataFrame(data)
-    return df.sort_values("Change %", ascending=False)
+
+    # Ensure column exists before sorting
+    if "Change %" in df.columns:
+        df = df.sort_values("Change %", ascending=False)
+
+    return df
 
 
 # -------------------------
-# News
+# NEWS FUNCTION (FIXED URL)
 # -------------------------
 def get_news(stock):
-    query = urllib.parse.quote(stock + " stock India")
-    url = f"https://news.google.com/rss/search?q={query}"
+    try:
+        query = urllib.parse.quote(stock + " stock India")
+        url = f"https://news.google.com/rss/search?q={query}"
 
-    feed = feedparser.parse(url)
-    return [entry.title for entry in feed.entries[:3]]
+        feed = feedparser.parse(url)
+
+        headlines = [entry.title for entry in feed.entries[:3]]
+
+        if not headlines:
+            return ["No recent news found"]
+
+        return headlines
+
+    except:
+        return ["Error fetching news"]
 
 
 # -------------------------
-# Fundamentals
+# FUNDAMENTALS FUNCTION
 # -------------------------
 def get_fundamentals(ticker):
-    stock = yf.Ticker(ticker)
-    info = stock.info
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.info
 
-    return {
-        "Market Cap": info.get("marketCap", "N/A"),
-        "PE Ratio": info.get("trailingPE", "N/A"),
-        "EPS": info.get("trailingEps", "N/A"),
-        "ROE": info.get("returnOnEquity", "N/A"),
-        "Debt/Equity": info.get("debtToEquity", "N/A"),
-        "52W High": info.get("fiftyTwoWeekHigh", "N/A"),
-        "52W Low": info.get("fiftyTwoWeekLow", "N/A")
-    }
+        return {
+            "Market Cap": info.get("marketCap", "N/A"),
+            "PE Ratio": info.get("trailingPE", "N/A"),
+            "EPS": info.get("trailingEps", "N/A"),
+            "ROE": info.get("returnOnEquity", "N/A"),
+            "Debt/Equity": info.get("debtToEquity", "N/A"),
+            "52W High": info.get("fiftyTwoWeekHigh", "N/A"),
+            "52W Low": info.get("fiftyTwoWeekLow", "N/A")
+        }
+
+    except:
+        return {"Error": "Unable to fetch fundamentals"}
 
 
 # -------------------------
-# Time filter
+# REASON ANALYSIS
+# -------------------------
+def get_reason(news):
+    text = " ".join(news).lower()
+
+    if any(word in text for word in ["profit", "earnings", "results"]):
+        return "📊 Earnings Driven Move"
+    elif any(word in text for word in ["loss", "fall", "decline"]):
+        return "⚠️ Weak Performance"
+    elif any(word in text for word in ["deal", "merger", "acquisition"]):
+        return "🤝 Corporate Action"
+    elif any(word in text for word in ["upgrade", "buy rating"]):
+        return "📈 Positive Sentiment"
+    else:
+        return "📰 General Market Movement"
+
+
+# -------------------------
+# UI
 # -------------------------
 period = st.selectbox(
     "Select Time Range",
     ["1d", "15d", "1mo"]
 )
 
-if st.button("Fetch Data"):
+if st.button("🔄 Fetch Data"):
 
     df = get_performance(period)
+
+    # Prevent crash
+    if df.empty:
+        st.warning("No data available. Try again later.")
+        st.stop()
 
     gainers = df.head(10)
     losers = df.tail(10).sort_values("Change %")
 
     col1, col2 = st.columns(2)
 
+    # -------- GAINERS --------
     with col1:
         st.subheader("📈 Top 10 Gainers")
-        st.dataframe(gainers)
+        st.dataframe(gainers, use_container_width=True)
 
+    # -------- LOSERS --------
     with col2:
         st.subheader("📉 Top 10 Losers")
-        st.dataframe(losers)
+        st.dataframe(losers, use_container_width=True)
 
-    st.subheader("📊 Detailed Analysis")
+    # -------------------------
+    # DETAILED ANALYSIS
+    # -------------------------
+    st.subheader("📊 Stock Detailed Analysis")
 
-    selected = st.selectbox(
-        "Select Stock",
-        df["Ticker"]
-    )
+    selected = st.selectbox("Select Stock", df["Ticker"])
 
+    # Fundamentals
     fundamentals = get_fundamentals(selected)
 
-    st.write("### Fundamentals")
+    st.write("### 📊 Fundamentals")
     st.json(fundamentals)
 
-    st.write("### Latest News")
+    # News
+    st.write("### 📰 Latest News")
     news = get_news(selected)
 
     for n in news:
         st.write("-", n)
+
+    # Reason
+    reason = get_reason(news)
+    st.write("### 🧠 Reason")
+    st.write(reason)

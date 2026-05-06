@@ -3,23 +3,70 @@ import yfinance as yf
 import pandas as pd
 import feedparser
 import urllib.parse
+import time
 
-st.set_page_config(page_title="Pro Stock Analyzer", layout="wide")
+st.set_page_config(page_title="AI Stock Scanner", layout="wide")
 
-st.title("📈 Pro Stock Analyzer 🚀")
+st.title("📈 AI Stock Scanner 🚀")
 
 # -------------------------
-# NSE STOCK LIST (You can expand later)
+# STOCK LIST
 # -------------------------
 stocks = [
-    "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS",
-    "ICICIBANK.NS", "SBIN.NS", "LT.NS", "ITC.NS",
-    "AXISBANK.NS", "BHARTIARTL.NS"
+    "RELIANCE.NS","TCS.NS","INFY.NS","HDFCBANK.NS","ICICIBANK.NS",
+    "SBIN.NS","LT.NS","ITC.NS","AXISBANK.NS","KOTAKBANK.NS",
+    "HCLTECH.NS","WIPRO.NS","BHARTIARTL.NS","MARUTI.NS","ASIANPAINT.NS"
 ]
 
 # -------------------------
-# PERFORMANCE FUNCTION (FIXED)
+# TECHNICAL INDICATORS
 # -------------------------
+def calculate_indicators(hist):
+
+    hist["MA20"] = hist["Close"].rolling(20).mean()
+    hist["MA50"] = hist["Close"].rolling(50).mean()
+
+    # RSI
+    delta = hist["Close"].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    rs = gain / loss
+    hist["RSI"] = 100 - (100 / (1 + rs))
+
+    # Volume spike
+    hist["Vol_Avg"] = hist["Volume"].rolling(10).mean()
+    hist["Vol_Spike"] = hist["Volume"] > (1.5 * hist["Vol_Avg"])
+
+    return hist
+
+
+# -------------------------
+# AI REASONING
+# -------------------------
+def generate_reason(data):
+    reason = []
+
+    if data["RSI"] > 60:
+        reason.append("Strong RSI (Bullish)")
+    elif data["RSI"] < 40:
+        reason.append("Weak RSI (Bearish)")
+
+    if data["Close"] > data["MA20"] and data["Close"] > data["MA50"]:
+        reason.append("Above Moving Averages (Uptrend)")
+
+    if data["Vol_Spike"]:
+        reason.append("High Volume Activity")
+
+    if not reason:
+        return "No strong signals"
+
+    return ", ".join(reason)
+
+
+# -------------------------
+# PERFORMANCE
+# -------------------------
+@st.cache_data(ttl=300)
 def get_performance(period):
     data = []
 
@@ -27,118 +74,79 @@ def get_performance(period):
         try:
             stock = yf.Ticker(ticker)
 
-            # FIX for 1 day issue
-            if period == "1d":
-                hist = stock.history(period="2d")
-            else:
-                hist = stock.history(period=period)
+            hist = stock.history(period="3mo")  # needed for indicators
+            hist = calculate_indicators(hist)
 
-            if hist is None or len(hist) < 2:
+            if len(hist) < 50:
                 continue
 
-            start = hist["Close"].iloc[0]
-            end = hist["Close"].iloc[-1]
+            latest = hist.iloc[-1]
 
-            change = ((end - start) / start) * 100
+            # Period change
+            if period == "1d":
+                prev = hist.iloc[-2]["Close"]
+            elif period == "15d":
+                prev = hist.iloc[-15]["Close"]
+            else:
+                prev = hist.iloc[-30]["Close"]
+
+            change = ((latest["Close"] - prev) / prev) * 100
 
             data.append({
                 "Ticker": ticker,
-                "Price": round(end, 2),
-                "Change %": round(change, 2)
+                "Price": round(latest["Close"], 2),
+                "Change %": round(change, 2),
+                "RSI": round(latest["RSI"], 2),
+                "Reason": generate_reason(latest)
             })
 
         except:
             continue
 
-    # Safety check
-    if not data:
-        return pd.DataFrame(columns=["Ticker", "Price", "Change %"])
-
     df = pd.DataFrame(data)
 
-    # Ensure column exists before sorting
-    if "Change %" in df.columns:
-        df = df.sort_values("Change %", ascending=False)
+    if df.empty:
+        return df
 
-    return df
+    return df.sort_values("Change %", ascending=False)
 
 
 # -------------------------
-# NEWS FUNCTION (FIXED URL)
+# NEWS
 # -------------------------
 def get_news(stock):
     try:
-        query = urllib.parse.quote(stock + " stock India")
+        clean = stock.replace(".NS","")
+        query = urllib.parse.quote(clean + " stock India")
         url = f"https://news.google.com/rss/search?q={query}"
 
         feed = feedparser.parse(url)
-
-        headlines = [entry.title for entry in feed.entries[:3]]
-
-        if not headlines:
-            return ["No recent news found"]
-
-        return headlines
-
+        return [e.title for e in feed.entries[:3]]
     except:
-        return ["Error fetching news"]
+        return ["No news available"]
 
 
 # -------------------------
-# FUNDAMENTALS FUNCTION
+# AUTO REFRESH
 # -------------------------
-def get_fundamentals(ticker):
-    try:
-        stock = yf.Ticker(ticker)
-        info = stock.info
+refresh = st.checkbox("🔄 Auto Refresh (30 sec)")
 
-        return {
-            "Market Cap": info.get("marketCap", "N/A"),
-            "PE Ratio": info.get("trailingPE", "N/A"),
-            "EPS": info.get("trailingEps", "N/A"),
-            "ROE": info.get("returnOnEquity", "N/A"),
-            "Debt/Equity": info.get("debtToEquity", "N/A"),
-            "52W High": info.get("fiftyTwoWeekHigh", "N/A"),
-            "52W Low": info.get("fiftyTwoWeekLow", "N/A")
-        }
-
-    except:
-        return {"Error": "Unable to fetch fundamentals"}
-
-
-# -------------------------
-# REASON ANALYSIS
-# -------------------------
-def get_reason(news):
-    text = " ".join(news).lower()
-
-    if any(word in text for word in ["profit", "earnings", "results"]):
-        return "📊 Earnings Driven Move"
-    elif any(word in text for word in ["loss", "fall", "decline"]):
-        return "⚠️ Weak Performance"
-    elif any(word in text for word in ["deal", "merger", "acquisition"]):
-        return "🤝 Corporate Action"
-    elif any(word in text for word in ["upgrade", "buy rating"]):
-        return "📈 Positive Sentiment"
-    else:
-        return "📰 General Market Movement"
+if refresh:
+    time.sleep(30)
+    st.rerun()
 
 
 # -------------------------
 # UI
 # -------------------------
-period = st.selectbox(
-    "Select Time Range",
-    ["1d", "15d", "1mo"]
-)
+period = st.selectbox("Select Period", ["1d", "15d", "1mo"])
 
-if st.button("🔄 Fetch Data"):
+if st.button("📊 Scan Market") or refresh:
 
     df = get_performance(period)
 
-    # Prevent crash
     if df.empty:
-        st.warning("No data available. Try again later.")
+        st.warning("No data available")
         st.stop()
 
     gainers = df.head(10)
@@ -146,37 +154,26 @@ if st.button("🔄 Fetch Data"):
 
     col1, col2 = st.columns(2)
 
-    # -------- GAINERS --------
     with col1:
-        st.subheader("📈 Top 10 Gainers")
-        st.dataframe(gainers, use_container_width=True)
+        st.subheader("📈 Top Gainers")
+        st.dataframe(gainers)
 
-    # -------- LOSERS --------
     with col2:
-        st.subheader("📉 Top 10 Losers")
-        st.dataframe(losers, use_container_width=True)
+        st.subheader("📉 Top Losers")
+        st.dataframe(losers)
 
     # -------------------------
-    # DETAILED ANALYSIS
+    # DETAIL VIEW
     # -------------------------
-    st.subheader("📊 Stock Detailed Analysis")
+    st.subheader("🔍 Stock Deep Dive")
 
     selected = st.selectbox("Select Stock", df["Ticker"])
 
-    # Fundamentals
-    fundamentals = get_fundamentals(selected)
+    st.write("### 🧠 AI Insight")
+    st.write(df[df["Ticker"] == selected]["Reason"].values[0])
 
-    st.write("### 📊 Fundamentals")
-    st.json(fundamentals)
-
-    # News
-    st.write("### 📰 Latest News")
+    st.write("### 📰 News")
     news = get_news(selected)
 
     for n in news:
         st.write("-", n)
-
-    # Reason
-    reason = get_reason(news)
-    st.write("### 🧠 Reason")
-    st.write(reason)

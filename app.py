@@ -4,13 +4,19 @@ import pandas as pd
 import feedparser
 import urllib.parse
 import time
-
-st.set_page_config(page_title="AI Stock Scanner", layout="wide")
-
-st.title("📈 AI Stock Scanner 🚀")
+from openai import OpenAI
 
 # -------------------------
-# STOCK LIST
+# CONFIG
+# -------------------------
+st.set_page_config(page_title="AI Stock Scanner", layout="wide")
+
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+
+st.title("📈 AI Stock Scanner (Pro) 🚀")
+
+# -------------------------
+# STOCK LIST (expandable)
 # -------------------------
 stocks = [
     "RELIANCE.NS","TCS.NS","INFY.NS","HDFCBANK.NS","ICICIBANK.NS",
@@ -22,46 +28,19 @@ stocks = [
 # TECHNICAL INDICATORS
 # -------------------------
 def calculate_indicators(hist):
-
     hist["MA20"] = hist["Close"].rolling(20).mean()
     hist["MA50"] = hist["Close"].rolling(50).mean()
 
-    # RSI
     delta = hist["Close"].diff()
     gain = (delta.where(delta > 0, 0)).rolling(14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     rs = gain / loss
     hist["RSI"] = 100 - (100 / (1 + rs))
 
-    # Volume spike
     hist["Vol_Avg"] = hist["Volume"].rolling(10).mean()
     hist["Vol_Spike"] = hist["Volume"] > (1.5 * hist["Vol_Avg"])
 
     return hist
-
-
-# -------------------------
-# AI REASONING
-# -------------------------
-def generate_reason(data):
-    reason = []
-
-    if data["RSI"] > 60:
-        reason.append("Strong RSI (Bullish)")
-    elif data["RSI"] < 40:
-        reason.append("Weak RSI (Bearish)")
-
-    if data["Close"] > data["MA20"] and data["Close"] > data["MA50"]:
-        reason.append("Above Moving Averages (Uptrend)")
-
-    if data["Vol_Spike"]:
-        reason.append("High Volume Activity")
-
-    if not reason:
-        return "No strong signals"
-
-    return ", ".join(reason)
-
 
 # -------------------------
 # PERFORMANCE
@@ -73,16 +52,14 @@ def get_performance(period):
     for ticker in stocks:
         try:
             stock = yf.Ticker(ticker)
-
-            hist = stock.history(period="3mo")  # needed for indicators
-            hist = calculate_indicators(hist)
+            hist = stock.history(period="3mo")
 
             if len(hist) < 50:
                 continue
 
+            hist = calculate_indicators(hist)
             latest = hist.iloc[-1]
 
-            # Period change
             if period == "1d":
                 prev = hist.iloc[-2]["Close"]
             elif period == "15d":
@@ -96,8 +73,7 @@ def get_performance(period):
                 "Ticker": ticker,
                 "Price": round(latest["Close"], 2),
                 "Change %": round(change, 2),
-                "RSI": round(latest["RSI"], 2),
-                "Reason": generate_reason(latest)
+                "RSI": round(latest["RSI"], 2)
             })
 
         except:
@@ -109,7 +85,6 @@ def get_performance(period):
         return df
 
     return df.sort_values("Change %", ascending=False)
-
 
 # -------------------------
 # NEWS
@@ -125,6 +100,37 @@ def get_news(stock):
     except:
         return ["No news available"]
 
+# -------------------------
+# GPT AI REASONING (CACHED)
+# -------------------------
+@st.cache_data(ttl=600)
+def get_ai_reason(stock, price, change, rsi, news):
+
+    prompt = f"""
+    Analyze why this stock moved.
+
+    Stock: {stock}
+    Price: {price}
+    Change: {change}%
+    RSI: {rsi}
+
+    News:
+    {news}
+
+    Give a short professional explanation (2-3 lines).
+    """
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.5
+        )
+
+        return response.choices[0].message.content
+
+    except:
+        return "AI analysis unavailable"
 
 # -------------------------
 # AUTO REFRESH
@@ -134,7 +140,6 @@ refresh = st.checkbox("🔄 Auto Refresh (30 sec)")
 if refresh:
     time.sleep(30)
     st.rerun()
-
 
 # -------------------------
 # UI
@@ -155,12 +160,12 @@ if st.button("📊 Scan Market") or refresh:
     col1, col2 = st.columns(2)
 
     with col1:
-        st.subheader("📈 Top Gainers")
-        st.dataframe(gainers)
+        st.subheader("📈 Top 10 Gainers")
+        st.dataframe(gainers, use_container_width=True)
 
     with col2:
-        st.subheader("📉 Top Losers")
-        st.dataframe(losers)
+        st.subheader("📉 Top 10 Losers")
+        st.dataframe(losers, use_container_width=True)
 
     # -------------------------
     # DETAIL VIEW
@@ -168,12 +173,21 @@ if st.button("📊 Scan Market") or refresh:
     st.subheader("🔍 Stock Deep Dive")
 
     selected = st.selectbox("Select Stock", df["Ticker"])
+    row = df[df["Ticker"] == selected].iloc[0]
 
-    st.write("### 🧠 AI Insight")
-    st.write(df[df["Ticker"] == selected]["Reason"].values[0])
-
-    st.write("### 📰 News")
     news = get_news(selected)
 
+    ai_reason = get_ai_reason(
+        selected,
+        row["Price"],
+        row["Change %"],
+        row["RSI"],
+        news
+    )
+
+    st.write("### 🧠 AI Insight")
+    st.write(ai_reason)
+
+    st.write("### 📰 News")
     for n in news:
         st.write("-", n)

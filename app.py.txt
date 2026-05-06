@@ -1,4 +1,0 @@
-import streamlit as st
-
-st.title("My First Stock App 🚀")
-st.write("If you see this, your app is working!")

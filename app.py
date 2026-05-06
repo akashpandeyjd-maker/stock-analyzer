@@ -1,124 +1,117 @@
 import streamlit as st
-import requests
-from bs4 import BeautifulSoup
+import yfinance as yf
+import pandas as pd
 import feedparser
 import urllib.parse
+from datetime import datetime, timedelta
 
-st.set_page_config(page_title="Stock Analyzer", layout="wide")
+st.set_page_config(page_title="Pro Stock Analyzer", layout="wide")
 
-st.title("📈 Stock Analyzer 🚀")
+st.title("📈 Pro Stock Analyzer")
 
-# -------------------------------
-# Get Gainers & Losers
-# -------------------------------
-def get_market_data():
-    url = "https://www.moneycontrol.com/stocks/marketstats/index.php"
-    headers = {"User-Agent": "Mozilla/5.0"}
+# -------------------------
+# Sample NSE stocks
+# -------------------------
+stocks = [
+    "RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS",
+    "ICICIBANK.NS", "SBIN.NS", "LT.NS", "ITC.NS",
+    "AXISBANK.NS", "BHARTIARTL.NS"
+]
 
-    response = requests.get(url, headers=headers)
-    soup = BeautifulSoup(response.text, "html.parser")
 
-    tables = soup.find_all("table")
+# -------------------------
+# Get performance
+# -------------------------
+def get_performance(period):
+    data = []
 
-    gainers, losers = [], []
+    for ticker in stocks:
+        stock = yf.Ticker(ticker)
+        hist = stock.history(period=period)
 
-    try:
-        # Top Gainers
-        for row in tables[0].find_all("tr")[1:6]:
-            cols = row.find_all("td")
-            gainers.append({
-                "Stock": cols[0].text.strip(),
-                "Price": cols[1].text.strip(),
-                "Change": cols[2].text.strip()
+        if len(hist) >= 2:
+            start = hist["Close"].iloc[0]
+            end = hist["Close"].iloc[-1]
+            change = ((end - start) / start) * 100
+
+            data.append({
+                "Ticker": ticker,
+                "Price": round(end, 2),
+                "Change %": round(change, 2)
             })
 
-        # Top Losers
-        for row in tables[1].find_all("tr")[1:6]:
-            cols = row.find_all("td")
-            losers.append({
-                "Stock": cols[0].text.strip(),
-                "Price": cols[1].text.strip(),
-                "Change": cols[2].text.strip()
-            })
-
-    except:
-        st.error("⚠️ Error fetching data from Moneycontrol")
-
-    return gainers, losers
+    df = pd.DataFrame(data)
+    return df.sort_values("Change %", ascending=False)
 
 
-# -------------------------------
-# Get News (FIXED URL ISSUE)
-# -------------------------------
+# -------------------------
+# News
+# -------------------------
 def get_news(stock):
     query = urllib.parse.quote(stock + " stock India")
     url = f"https://news.google.com/rss/search?q={query}"
 
-    try:
-        feed = feedparser.parse(url)
-        headlines = [entry.title for entry in feed.entries[:3]]
-        return headlines if headlines else ["No recent news found"]
-    except:
-        return ["Error fetching news"]
+    feed = feedparser.parse(url)
+    return [entry.title for entry in feed.entries[:3]]
 
 
-# -------------------------------
-# Analyze Reason
-# -------------------------------
-def get_reason(news):
-    text = " ".join(news).lower()
+# -------------------------
+# Fundamentals
+# -------------------------
+def get_fundamentals(ticker):
+    stock = yf.Ticker(ticker)
+    info = stock.info
 
-    if any(word in text for word in ["profit", "earnings", "revenue", "results"]):
-        return "📊 Strong Earnings"
-    elif any(word in text for word in ["loss", "decline", "fall", "down"]):
-        return "⚠️ Weak Performance"
-    elif any(word in text for word in ["deal", "acquisition", "merger"]):
-        return "🤝 Corporate News"
-    elif any(word in text for word in ["upgrade", "buy rating"]):
-        return "📈 Positive Sentiment"
-    else:
-        return "📰 General Market Movement"
+    return {
+        "Market Cap": info.get("marketCap", "N/A"),
+        "PE Ratio": info.get("trailingPE", "N/A"),
+        "EPS": info.get("trailingEps", "N/A"),
+        "ROE": info.get("returnOnEquity", "N/A"),
+        "Debt/Equity": info.get("debtToEquity", "N/A"),
+        "52W High": info.get("fiftyTwoWeekHigh", "N/A"),
+        "52W Low": info.get("fiftyTwoWeekLow", "N/A")
+    }
 
 
-# -------------------------------
-# Button UI
-# -------------------------------
-if st.button("🔄 Fetch Market Data"):
+# -------------------------
+# Time filter
+# -------------------------
+period = st.selectbox(
+    "Select Time Range",
+    ["1d", "15d", "1mo"]
+)
 
-    gainers, losers = get_market_data()
+if st.button("Fetch Data"):
+
+    df = get_performance(period)
+
+    gainers = df.head(10)
+    losers = df.tail(10).sort_values("Change %")
 
     col1, col2 = st.columns(2)
 
-    # -------- GAINERS --------
     with col1:
-        st.subheader("📈 Top Gainers")
+        st.subheader("📈 Top 10 Gainers")
+        st.dataframe(gainers)
 
-        for stock in gainers:
-            news = get_news(stock["Stock"])
-            reason = get_reason(news)
-
-            st.markdown(f"### {stock['Stock']}")
-            st.write(f"💰 Price: {stock['Price']}")
-            st.write(f"📊 Change: {stock['Change']}")
-            st.write(f"🧠 Reason: {reason}")
-
-            with st.expander("📰 News"):
-                for n in news:
-                    st.write("-", n)
-
-    # -------- LOSERS --------
     with col2:
-        st.subheader("📉 Top Losers")
+        st.subheader("📉 Top 10 Losers")
+        st.dataframe(losers)
 
-        for stock in losers:
-            news = get_news(stock["Stock"])
-            reason = get_reason(news)
+    st.subheader("📊 Detailed Analysis")
 
-            st.markdown(f"### {stock['Stock']}")
-            st.write(f"💰 Price: {stock['Price']}")
-            st.write(f"📊 Change: {stock['Change']}")
-            st.write(f"🧠 Reason: {reason}")
+    selected = st.selectbox(
+        "Select Stock",
+        df["Ticker"]
+    )
 
-            with st.expander("📰 News"):
-                for n in news:
-                    st.write("-", n)
+    fundamentals = get_fundamentals(selected)
+
+    st.write("### Fundamentals")
+    st.json(fundamentals)
+
+    st.write("### Latest News")
+    news = get_news(selected)
+
+    for n in news:
+        st.write("-", n)

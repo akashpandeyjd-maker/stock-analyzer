@@ -14,22 +14,23 @@ try:
 except:
     AI_ENABLED = False
 
-st.set_page_config(page_title="Trading Dashboard", layout="wide")
+st.set_page_config(page_title="Stock Intelligence Dashboard", layout="wide")
 
-st.title("📊 Trading Dashboard 🚀")
+st.title("📊 Stock Intelligence Dashboard 🚀")
 
 # -------------------------
 # STOCK LIST
 # -------------------------
 stocks = [
     "RELIANCE.NS","TCS.NS","INFY.NS","HDFCBANK.NS","ICICIBANK.NS",
-    "SBIN.NS","LT.NS","ITC.NS","AXISBANK.NS","KOTAKBANK.NS"
+    "SBIN.NS","LT.NS","ITC.NS","AXISBANK.NS","KOTAKBANK.NS",
+    "BHARTIARTL.NS","MARUTI.NS","ASIANPAINT.NS","SUNPHARMA.NS","TITAN.NS"
 ]
 
 # -------------------------
 # INDICATORS
 # -------------------------
-def indicators(df):
+def add_indicators(df):
     df["MA20"] = df["Close"].rolling(20).mean()
     df["MA50"] = df["Close"].rolling(50).mean()
 
@@ -56,18 +57,30 @@ def get_signal(rsi, price, ma20, ma50, vol):
         return "HOLD"
 
 # -------------------------
-# DATA
+# MARKET SCAN
 # -------------------------
 @st.cache_data(ttl=300)
-def get_data():
-    rows = []
+def scan_market(period):
+    data = []
 
     for t in stocks:
         try:
             df = yf.Ticker(t).history(period="3mo")
-            df = indicators(df)
+            df = add_indicators(df)
+
+            if len(df) < 50:
+                continue
 
             latest = df.iloc[-1]
+
+            if period == "1d":
+                prev = df.iloc[-2]["Close"]
+            elif period == "15d":
+                prev = df.iloc[-15]["Close"]
+            else:
+                prev = df.iloc[-30]["Close"]
+
+            change = ((latest["Close"] - prev) / prev) * 100
 
             signal = get_signal(
                 latest["RSI"],
@@ -77,9 +90,10 @@ def get_data():
                 latest["Vol_Spike"]
             )
 
-            rows.append({
+            data.append({
                 "Ticker": t,
                 "Price": round(latest["Close"],2),
+                "Change %": round(change,2),
                 "RSI": round(latest["RSI"],2),
                 "Signal": signal
             })
@@ -87,7 +101,8 @@ def get_data():
         except:
             continue
 
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(data)
+    return df.sort_values("Change %", ascending=False)
 
 # -------------------------
 # NEWS
@@ -95,28 +110,34 @@ def get_data():
 def get_news(stock):
     try:
         name = stock.replace(".NS","")
-        query = urllib.parse.quote(name + " India stock news")
+        query = urllib.parse.quote(name + " stock India news")
         url = f"https://news.google.com/rss/search?q={query}"
 
         feed = feedparser.parse(url)
         return [e.title for e in feed.entries[:5]]
     except:
-        return ["No news"]
+        return ["No news available"]
 
 # -------------------------
 # AI / FALLBACK
 # -------------------------
-def ai_reason(stock, row, news):
+def get_reason(stock, row, news):
 
+    # GPT
     if AI_ENABLED:
         try:
             prompt = f"""
-            Explain stock movement.
+            Explain why this stock moved.
 
             Stock: {stock}
+            Change: {row['Change %']}%
             RSI: {row['RSI']}
             Signal: {row['Signal']}
-            News: {news}
+
+            News:
+            {news}
+
+            Give 2 short lines explanation.
             """
 
             res = client.chat.completions.create(
@@ -125,11 +146,17 @@ def ai_reason(stock, row, news):
             )
 
             return res.choices[0].message.content
+
         except:
             pass
 
-    # fallback
-    return f"{row['Signal']} signal based on RSI and trend."
+    # fallback logic
+    if row["Signal"] == "BUY":
+        return "Bullish trend supported by RSI and moving averages."
+    elif row["Signal"] == "SELL":
+        return "Bearish sentiment with weak RSI."
+    else:
+        return "Sideways movement with no strong signals."
 
 # -------------------------
 # AUTO REFRESH
@@ -139,66 +166,68 @@ if st.checkbox("🔄 Auto Refresh"):
     st.rerun()
 
 # -------------------------
-# MAIN
+# UI
 # -------------------------
-if st.button("📊 Load Dashboard"):
+period = st.selectbox("Select Timeframe", ["1d","15d","1mo"])
 
-    df = get_data()
+if st.button("📊 Scan Market"):
 
-    st.subheader("📋 Market Overview")
-    st.dataframe(df)
+    df = scan_market(period)
+
+    if df.empty:
+        st.warning("No data")
+        st.stop()
 
     # -------------------------
-    # STOCK DETAIL
+    # GAINERS / LOSERS
     # -------------------------
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("📈 Top Gainers")
+        st.dataframe(df.head(10))
+
+    with col2:
+        st.subheader("📉 Top Losers")
+        st.dataframe(df.tail(10).sort_values("Change %"))
+
+    # -------------------------
+    # STOCK ANALYSIS
+    # -------------------------
+    st.subheader("🔍 Stock Analysis")
+
     stock = st.selectbox("Select Stock", df["Ticker"])
+    row = df[df["Ticker"]==stock].iloc[0]
 
     hist = yf.Ticker(stock).history(period="3mo")
-    hist = indicators(hist)
-
+    hist = add_indicators(hist)
     latest = hist.iloc[-1]
 
-    # -------------------------
-    # INDICATORS DISPLAY
-    # -------------------------
-    st.subheader("📊 Indicators")
+    # Indicators
+    st.write("### 📊 Indicators")
+    c1,c2,c3,c4 = st.columns(4)
+    c1.metric("RSI", round(latest["RSI"],2))
+    c2.metric("MA20", round(latest["MA20"],2))
+    c3.metric("MA50", round(latest["MA50"],2))
+    c4.metric("Volume Spike", "Yes" if latest["Vol_Spike"] else "No")
 
-    col1, col2, col3, col4 = st.columns(4)
+    st.write("### Signal:", row["Signal"])
 
-    col1.metric("RSI", round(latest["RSI"],2))
-    col2.metric("MA20", round(latest["MA20"],2))
-    col3.metric("MA50", round(latest["MA50"],2))
-    col4.metric("Volume Spike", "Yes" if latest["Vol_Spike"] else "No")
-
-    st.write("### Signal:", get_signal(
-        latest["RSI"],
-        latest["Close"],
-        latest["MA20"],
-        latest["MA50"],
-        latest["Vol_Spike"]
-    ))
-
-    # -------------------------
-    # CHART (VERY IMPORTANT)
-    # -------------------------
-    st.subheader("📈 Price Chart")
-
+    # Chart
+    st.write("### 📈 Chart")
     fig, ax = plt.subplots()
     ax.plot(hist["Close"], label="Price")
     ax.plot(hist["MA20"], label="MA20")
     ax.plot(hist["MA50"], label="MA50")
     ax.legend()
-
     st.pyplot(fig)
 
-    # -------------------------
-    # NEWS + AI
-    # -------------------------
+    # News + Reason
     news = get_news(stock)
 
-    st.subheader("🧠 Insight")
-    st.write(ai_reason(stock, df[df["Ticker"]==stock].iloc[0], news))
+    st.write("### 🧠 Why Stock Moved")
+    st.write(get_reason(stock, row, news))
 
-    st.subheader("📰 News")
+    st.write("### 📰 News")
     for n in news:
         st.write("-", n)
